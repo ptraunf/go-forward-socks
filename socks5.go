@@ -247,22 +247,22 @@ func exchange(client, remote net.Conn) {
 	rBuf := make([]byte, buffSize)
 
 	for {
+		clientRead := false
+		remoteRead := false
+
 		// if client can be read, send its bytes to remote until error
 		nClientRead, err := client.Read(cBuf)
-		if err != nil {
-			log.Printf("exchange error reading client: %v\n", err)
-		} else {
+		if err == nil {
+			clientRead = true
 			_, writeErr := remote.Write(cBuf[:nClientRead])
 			if writeErr != nil {
 				log.Printf("Error Writing to remote: %v", writeErr)
 			}
 		}
-
 		// if remote can be read, send its bytes to client until error
 		nRemoteRead, err := remote.Read(rBuf)
-		if err != nil {
-			log.Printf("exchange error reading client: %v\n", err)
-		} else {
+		if err == nil {
+			remoteRead = true
 			_, writeErr := client.Write(rBuf[:nRemoteRead])
 			if writeErr != nil {
 				log.Printf("Error Writing to client: %v", writeErr)
@@ -271,6 +271,9 @@ func exchange(client, remote net.Conn) {
 			// if nWritten <= 0 {
 			// 	break
 			// }
+		}
+		if !(clientRead || remoteRead) {
+			return
 		}
 	}
 }
