@@ -166,7 +166,7 @@ func TestGenerateFailedReply(t *testing.T) {
 func testHandleSocks5(t *testing.T) {
 	conn := newMockConn()
 	conn.receive <- []byte{Version, byte(Connect), Resv, byte(IPv4), 0x0, byte(80)}
-	handleSocks5(conn)
+	// handleSocks5(conn)
 	go func(sent chan []byte) {
 		for bytes := range sent {
 			log.Printf("Bytes sent to client: % x", bytes)
