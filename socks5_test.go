@@ -163,7 +163,7 @@ func TestGenerateFailedReply(t *testing.T) {
 
 }
 
-func testHandleSocks5(t *testing.T) {
+func TestHandleSocks5(t *testing.T) {
 	conn := newMockConn()
 	conn.receive <- []byte{Version, byte(Connect), Resv, byte(IPv4), 0x0, byte(80)}
 	// handleSocks5(conn)
