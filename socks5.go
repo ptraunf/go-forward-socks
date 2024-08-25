@@ -56,7 +56,52 @@ const (
 type socksNegotiation []byte
 
 func (n socksNegotiation) parse() (int, int) {
-	return 0, 0
+	return int(n[0]), 0
+}
+
+type Message struct {
+	from    string
+	payload []byte
+}
+type Server struct {
+	listenAddr string
+	listener   net.Listener
+	quitCh     chan struct{} // empty struct takes no memory
+	msgCh      chan Message
+	// peerMap    map[net.Addr]net.Conn // may want to maintain map of clients
+}
+
+func NewServer(listenAddr string) *Server {
+	return &Server{
+		listenAddr: listenAddr,
+		quitCh:     make(chan struct{}),
+		msgCh:      make(chan Message, 10), // Buffer
+	}
+}
+
+func (s *Server) Start() error {
+	listener, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	defer close(s.msgCh)
+	s.listener = listener
+	go s.acceptLoop()
+	<-s.quitCh //
+	return nil
+}
+
+func (s *Server) acceptLoop() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			log.Printf("accept error: %v", err)
+			continue
+		}
+		log.Println("New connection")
+		go s.handleConnection(conn)
+	}
 }
 
 func handleBasic(c net.Conn) {
@@ -102,7 +147,7 @@ func hasByte(a []byte, value byte) bool {
 	return false
 }
 
-func handleSocks5(c net.Conn) {
+func (s *Server) handleSocks5(c net.Conn) {
 	defer c.Close()
 	log.Printf("-> SOCKS5 Client Connection:\t%v", c.RemoteAddr())
 	connReader := bufio.NewReader(c)
@@ -164,12 +209,16 @@ func handleSocks5(c net.Conn) {
 	address = fmt.Sprintf("%v:%v", address, port)
 	log.Printf("Address:\t%v", address)
 	var bindAddress string
+	var remote net.Conn
+
 	if cmd == byte(Connect) {
-		remote, err := net.Dial("tcp", address)
+		r, err := net.Dial("tcp", address)
 		if err != nil {
 			log.Printf("Error dialing remote address (%v):\n%v", address, err.Error())
 			return
 		}
+		remote = r
+		defer remote.Close()
 		bindAddress = remote.LocalAddr().String()
 	} else {
 		log.Printf("Error: Command %v not supported", cmd)
@@ -184,21 +233,67 @@ func handleSocks5(c net.Conn) {
 	}
 	portBytes = make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, uint16(bindPort))
-
 	reply := generateReply(Succeeded, IPv4, bindHost, portBytes)
 	c.Write(reply)
+	if reply.replyCode() == Succeeded && cmd == byte(Connect) {
+		exchange(c, remote)
+	}
 }
 func exchange(client, remote net.Conn) {
-	// buffSize := 4096
+	buffSize := 4096
+	// clientCh := make(chan []byte)
+	// remoteCh := make(chan []byte)
+	cBuf := make([]byte, buffSize)
+	rBuf := make([]byte, buffSize)
 
-	// go func() {
-	// 	for {
+	for {
+		// if client can be read, send its bytes to remote until error
+		nClientRead, err := client.Read(cBuf)
+		if err != nil {
+			log.Printf("exchange error reading client: %v\n", err)
+		} else {
+			_, writeErr := remote.Write(cBuf[:nClientRead])
+			if writeErr != nil {
+				log.Printf("Error Writing to remote: %v", writeErr)
+			}
+		}
 
-	// 	}
-	// }()
+		// if remote can be read, send its bytes to client until error
+		nRemoteRead, err := remote.Read(rBuf)
+		if err != nil {
+			log.Printf("exchange error reading client: %v\n", err)
+		} else {
+			_, writeErr := client.Write(rBuf[:nRemoteRead])
+			if writeErr != nil {
+				log.Printf("Error Writing to client: %v", writeErr)
+				break
+			}
+			// if nWritten <= 0 {
+			// 	break
+			// }
+		}
+	}
 }
 
-func generateReply(code replyCode, addrType addressFamily, address []byte, port []byte) []byte {
+type reply []byte
+
+func (r reply) version() byte {
+	return r[0]
+}
+func (r reply) replyCode() replyCode {
+	return replyCode(r[1])
+}
+func (r reply) addressType() addressFamily {
+	return addressFamily(r[3])
+}
+func (r reply) address() []byte {
+	return []byte{r[4], r[5], r[6], r[7]}
+}
+func (r reply) port() []byte {
+	return []byte{r[8], r[9]}
+}
+
+func generateReply(code replyCode, addrType addressFamily, address []byte, port []byte) reply {
 	reply := make([]byte, 10)
 	reply[0] = Version
 	reply[1] = byte(code)
@@ -218,28 +313,24 @@ func generateReply(code replyCode, addrType addressFamily, address []byte, port 
 func generateFailureReply(errorCode replyCode, addrType addressFamily) []byte {
 	return generateReply(errorCode, addrType, []byte{0x00, 0x00, 0x00, 0x00}, []byte{0x00, 0x00})
 }
-func handleConnection(c net.Conn) {
+func (s *Server) handleConnection(c net.Conn) {
 	// handleBasic(c)
-	handleSocks5(c)
+	s.handleSocks5(c)
 }
 func run() {
-	port := 8080
-	address := fmt.Sprintf(":%v", port)
-	log.Printf("Listening at %v", address)
-	l, err := net.Listen("tcp", address)
-	if err != nil {
-		log.Printf(err.Error())
-		return
-	}
-	defer l.Close()
-	for {
-		c, err := l.Accept()
-		if err != nil {
-			log.Printf(err.Error())
-			return
+	// port := 8080
+	// address := fmt.Sprintf(":%v", port)
+	// log.Printf("Listening at %v", address)
+	address := ":3333"
+	server := NewServer(address)
+	go func() {
+		for msg := range server.msgCh {
+			fmt.Printf("Received message from %v:\n%v\n", msg.from, string(msg.payload))
 		}
-		go handleConnection(c)
-	}
+	}()
+
+	fmt.Println("Listening on ", address)
+	log.Fatal(server.Start())
 }
 func main() {
 	log.Printf("-> GO FWD SOCKS5 ->")
