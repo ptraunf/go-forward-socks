@@ -1,2 +1,12 @@
-scratch.txt
+.idea/
+.dccache
+
+**/*.pem
+**/*.cer
+**/*.crt
+**/*.p12
+
+
+
+*.txt
 gofwdsocks
